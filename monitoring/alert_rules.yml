@@ -1,0 +1,82 @@
+groups:
+  - name: cinema_alerts
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 85% for more than 5 minutes on {{ $labels.instance }}"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service is down"
+          description: "{{ $labels.job }} service is down on {{ $labels.instance }}"
+
+      # High video processing queue
+      - alert: HighVideoProcessingQueue
+        expr: celery_queue_length{queue="video_processing"} > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Video processing queue is growing"
+          description: "Video processing queue has {{ $value }} items for more than 5 minutes"
+
+      # Failed video processing tasks
+      - alert: HighVideoProcessingFailures
+        expr: rate(celery_task_failed_total{queue="video_processing"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High video processing failure rate"
+          description: "Video processing failure rate is {{ $value }} per second"
+
+      # MinIO storage usage
+      - alert: HighStorageUsage
+        expr: (minio_cluster_usage_total_bytes / minio_cluster_capacity_total_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High storage usage"
+          description: "MinIO storage usage is above 85%: {{ $value }}%"
+
+      # Database connection issues
+      - alert: DatabaseConnectionIssues
+        expr: rate(database_connections_failed_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failures"
+          description: "Database connection failure rate is {{ $value }} per second"
+
+      # Redis connection issues
+      - alert: RedisConnectionIssues
+        expr: redis_connected_clients < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis connection issues"
+          description: "Redis has no connected clients"

@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+# Установка системных зависимостей для обработки видео
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование requirements
+COPY requirements.txt .
+
+# Установка Python зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Установка дополнительных зависимостей для обработки видео
+RUN pip install celery[redis] minio python-multipart pillow
+
+# Копирование кода приложения
+COPY . .
+
+# Создание директории для временных файлов
+RUN mkdir -p /tmp/video_processing
+
+# Переменные окружения
+ENV PYTHONPATH=/app
+ENV CELERY_BROKER_URL=redis://redis:6379/0
+ENV CELERY_RESULT_BACKEND=redis://redis:6379/0
+
+# Команда по умолчанию
+CMD ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]

@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # MinIO Object Storage для хранения видеофайлов
+  minio:
+    image: minio/minio:latest
+    container_name: cinema_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password123}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - cinema_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO Client для создания buckets
+  minio-setup:
+    image: minio/mc:latest
+    container_name: cinema_minio_setup
+    depends_on:
+      - minio
+    networks:
+      - cinema_network
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set myminio http://minio:9000 admin password123;
+      /usr/bin/mc mb myminio/videos --ignore-existing;
+      /usr/bin/mc mb myminio/thumbnails --ignore-existing;
+      /usr/bin/mc mb myminio/manifests --ignore-existing;
+      /usr/bin/mc mb myminio/processed-videos --ignore-existing;
+      /usr/bin/mc policy set public myminio/thumbnails;
+      /usr/bin/mc policy set public myminio/manifests;
+      echo 'MinIO buckets created successfully';
+      exit 0;
+      "
+
+  # Redis для очередей и кэширования
+  redis:
+    image: redis:7-alpine
+    container_name: cinema_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cinema_network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker для обработки видео
+  video-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: cinema_video_worker
+    depends_on:
+      - redis
+      - minio
+      - postgres
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-admin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-password123}
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/cinema_db
+    volumes:
+      - ./backend:/app
+      - video_processing_temp:/tmp/video_processing
+    networks:
+      - cinema_network
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  # Celery Flower для мониторинга очередей
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: cinema_flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    networks:
+      - cinema_network
+    command: celery -A app.workers.celery_app flower --port=5555
+
+
+
+  # Nginx для проксирования и кэширования
+  nginx:
+    image: nginx:alpine
+    container_name: cinema_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/cache:/var/cache/nginx
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - minio
+    networks:
+      - cinema_network
+
+  # PostgreSQL (если еще не запущен)
+  postgres:
+    image: postgres:15
+    container_name: cinema_postgres
+    environment:
+      POSTGRES_DB: cinema_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cinema_network
+
+  # Prometheus для метрик
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cinema_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - cinema_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  # Grafana для визуализации метрик
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cinema_grafana
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - cinema_network
+
+volumes:
+  minio_data:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  video_processing_temp:
+  nginx_logs:
+
+networks:
+  cinema_network:
+    driver: bridge

@@ -152,7 +152,7 @@ cp .env.example .env
 
 Отредактируйте файл `.env`:
 ```
-DATABASE_URL=postgresql://cinema_user:cinema_pass@localhost:5432/cinema_db
+DATABASE_URL=postgresql://postgres:password@localhost:5432/cinema_db
 REDIS_URL=redis://localhost:6379/0
 MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=admin
@@ -173,58 +173,70 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_MINIO_ENDPOINT=http://localhost:9000
 ```
 
-### 4. Запуск инфраструктурных сервисов
+### 4. Быстрый запуск (рекомендуется)
 
+**Запуск всей системы одной командой:**
 ```bash
-# Запуск всех сервисов (PostgreSQL, Redis, MinIO, Prometheus, Grafana) через Docker
-docker-compose -f docker-compose.media.yml up -d
+./start-full-system.sh
 ```
 
-Это запустит:
-- PostgreSQL (база данных)
-- Redis (кэш и очередь задач)
-- MinIO (объектное хранилище)
-- Prometheus (сбор метрик)
-- Grafana (мониторинг дашборды)
+Этот скрипт автоматически:
+- Запускает все Docker сервисы (PostgreSQL, Redis, MinIO, Prometheus, Grafana)
+- Запускает Celery Worker для обработки видео
+- Запускает Backend API (FastAPI)
+- Запускает Frontend (Next.js)
+- Показывает статус всех сервисов
 
-### 5. Инициализация базы данных
+**Запуск только мониторинга (опционально):**
+```bash
+./start-monitoring.sh
+```
 
+### 5. Ручной запуск (альтернативный способ)
+
+Если предпочитаете запускать компоненты по отдельности:
+
+**Шаг 1: Запуск инфраструктурных сервисов**
+```bash
+sudo docker-compose -f docker-compose.media.yml up -d
+```
+
+**Шаг 2: Инициализация базы данных**
 ```bash
 cd backend
 source venv/bin/activate
-
-# Создание таблиц
-python -c "from app.db.database import create_tables; create_tables()"
-
-# Загрузка данных фильмов (опционально)
-python manage_db.py
-
-# Создание администратора
-python create_admin.py
+python manage_db.py  # Создание таблиц и загрузка данных
+python create_admin.py  # Создание администратора
 ```
 
-### 6. Запуск Celery Worker
-
+**Шаг 3: Запуск Celery Worker**
 ```bash
 cd backend
 source venv/bin/activate
 celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 ```
 
-### 7. Запуск приложений
-
-**Бэкенд:**
+**Шаг 4: Запуск Backend**
 ```bash
 cd backend
 source venv/bin/activate
 python main.py
 ```
 
-**Фронтенд:**
+**Шаг 5: Запуск Frontend**
 ```bash
 cd frontend
 npm run dev
 ```
+
+### 6. Остановка системы
+
+**Остановка всех сервисов:**
+```bash
+./stop-full-system.sh
+```
+
+Или нажмите `Ctrl+C` в терминале где запущен `start-full-system.sh`
 
 ## Порты и сервисы
 
@@ -251,8 +263,8 @@ npm run dev
 - Secret Key: `password123`
 
 **PostgreSQL:**
-- Пользователь: `cinema_user`
-- Пароль: `cinema_pass`
+- Пользователь: `postgres`
+- Пароль: `password`
 - База данных: `cinema_db`
 
 **Grafana:**
@@ -302,7 +314,16 @@ npm run dev
 │   ├── alembic/            # Миграции базы данных
 │   ├── logs/               # Логи приложения
 │   └── requirements.txt    # Зависимости Python
-├── docker-compose.yml       # Конфигурация Docker
+├── monitoring/              # Конфигурация мониторинга
+│   ├── grafana/            # Дашборды и источники данных
+│   ├── prometheus.yml      # Конфигурация Prometheus
+│   └── alert_rules.yml     # Правила алертов
+├── nginx/                   # Конфигурация Nginx
+├── docker-compose.media.yml # Docker сервисы
+├── start-full-system.sh     # Запуск всей системы
+├── start-monitoring.sh      # Запуск мониторинга
+├── stop-full-system.sh      # Остановка системы
+├── kill-processes.sh        # Очистка процессов
 └── README.md               # Документация
 ```
 
@@ -349,17 +370,29 @@ npm run dev
 ## Устранение неполадок
 
 **Проблемы с запуском:**
-1. Убедитесь, что все порты свободны
-2. Проверьте статус Docker контейнеров: `docker-compose ps`
-3. Проверьте логи сервисов: `docker-compose logs`
+1. Убедитесь, что все порты свободны (3000, 8000, 5432, 6379, 9000, 9001, 9090, 3002)
+2. Проверьте статус Docker контейнеров: `sudo docker ps`
+3. Проверьте логи сервисов: `sudo docker logs <container_name>`
+4. Используйте `./kill-processes.sh` для очистки зависших процессов
 
 **Проблемы с обработкой видео:**
-1. Убедитесь, что FFmpeg установлен
+1. Убедитесь, что FFmpeg установлен: `ffmpeg -version`
 2. Проверьте логи Celery: `tail -f backend/logs/celery.log`
-3. Проверьте доступность MinIO
+3. Проверьте доступность MinIO: `curl http://localhost:9000/minio/health/live`
 
 **Проблемы с базой данных:**
-1. Проверьте подключение к PostgreSQL
-2. Выполните миграции: `alembic upgrade head`
-3. Пересоздайте таблицы при необходимости
+1. Проверьте подключение к PostgreSQL: `sudo docker logs cinema_postgres`
+2. Пересоздайте базу данных: `cd backend && python manage_db.py`
+3. Проверьте переменные окружения в `.env`
+
+**Проблемы с мониторингом:**
+1. Запустите диагностику: `./start-monitoring.sh`
+2. Проверьте логи: `sudo docker logs cinema_prometheus` и `sudo docker logs cinema_grafana`
+3. Убедитесь, что порты 9090 и 3002 свободны
+
+**Полезные команды:**
+- Остановка всех сервисов: `./stop-full-system.sh`
+- Очистка процессов: `./kill-processes.sh`
+- Перезапуск Docker сервисов: `sudo docker-compose -f docker-compose.media.yml restart`
+- Просмотр логов в реальном времени: `tail -f backend/logs/celery.log`
 
